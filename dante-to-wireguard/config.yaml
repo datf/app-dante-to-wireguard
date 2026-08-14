@@ -8,7 +8,12 @@ arch:
   - amd64
   - aarch64
 startup: services
-host_network: true
+ports:
+  1080/tcp: null
+  1080/udp: null
+ports_description:
+  1080/tcp: SOCKS proxy TCP
+  1080/udp: SOCKS proxy UDP
 privileged:
   - NET_ADMIN
   - NET_RAW
