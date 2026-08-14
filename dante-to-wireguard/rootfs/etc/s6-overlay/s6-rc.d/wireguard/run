@@ -8,4 +8,7 @@ cp /config/wg0.conf /etc/wireguard
 
 resolvconf -u
 
+# Since we are a VPN client we do not need the sysctl commands.
+sed -i 's/cmd sysctl.*/#&/' /usr/bin/wg-quick
+
 exec wg-quick up wg0
