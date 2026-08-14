@@ -1,0 +1,11 @@
+#!/command/with-contenv bashio
+# ==============================================================================
+# Start wireguard
+# s6-overlay docs: https://github.com/just-containers/s6-overlay
+# ==============================================================================
+
+cp /config/wg0.conf /etc/wireguard
+
+resolvconf -u
+
+exec wg-quick up wg0
