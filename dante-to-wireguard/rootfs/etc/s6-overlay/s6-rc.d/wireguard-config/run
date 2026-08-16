@@ -1,0 +1,106 @@
+#!/command/with-contenv bashio
+# ==============================================================================
+# Rotate WireGuard configuration and add LAN routing
+# ==============================================================================
+
+CONFIG_FILES=( $(find /config -maxdepth 1 -name "wg*.conf" 2>/dev/null | sort -V) )
+if [ ${#CONFIG_FILES[@]} -eq 0 ]; then
+    CONFIG_FILES=( $(find /config -maxdepth 1 -name "wireguard*.conf" -o -name "*.conf" ! -name "sockd.conf" 2>/dev/null | sort -V) )
+fi
+
+TOTAL_FILES=${#CONFIG_FILES[@]}
+if [ "$TOTAL_FILES" -eq 0 ]; then
+    bashio::log.fatal "WireGuard configuration file not found in /config!"
+    bashio::exit.nok
+fi
+
+LAST_USED=""
+if [ -f /data/.wireguard_last_used ]; then
+    LAST_USED=$(cat /data/.wireguard_last_used)
+fi
+
+SELECTED_INDEX=0
+if [ -n "$LAST_USED" ]; then
+    for i in "${!CONFIG_FILES[@]}"; do
+        if [ "$(basename "${CONFIG_FILES[$i]}")" = "$LAST_USED" ]; then
+            SELECTED_INDEX=$(( (i + 1) % TOTAL_FILES ))
+            break
+        fi
+    done
+fi
+
+SELECTED_FILE="${CONFIG_FILES[$SELECTED_INDEX]}"
+SELECTED_FILENAME=$(basename "$SELECTED_FILE")
+SELECTED_NAME="${SELECTED_FILENAME%.*}"
+
+bashio::log.debug "Selected WireGuard configuration ($(( SELECTED_INDEX + 1 ))/${TOTAL_FILES}): ${SELECTED_FILENAME}"
+
+mkdir -p /data
+echo "$SELECTED_FILENAME" > /data/.wireguard_last_used
+
+IPV4_RANGES=()
+IPV6_RANGES=()
+
+if bashio::config.exists 'lan_subnets' && bashio::config.has_value 'lan_subnets'; then
+    for range in $(bashio::config 'lan_subnets'); do
+        range=$(echo "$range" | tr -d '"'\'' ')
+        if [[ "$range" == *":"* ]]; then
+            IPV6_RANGES+=("$range")
+        elif [[ "$range" == *"."* ]]; then
+            IPV4_RANGES+=("$range")
+        fi
+    done
+fi
+
+POSTUP_IPV4_CMDS=""
+PREDOWN_IPV4_CMDS=""
+if [ ${#IPV4_RANGES[@]} -gt 0 ]; then
+    for net in "${IPV4_RANGES[@]}"; do
+        POSTUP_IPV4_CMDS="${POSTUP_IPV4_CMDS}ip route add ${net} via \$GW dev \$DEV; "
+        PREDOWN_IPV4_CMDS="${PREDOWN_IPV4_CMDS}ip route del ${net} via \$GW dev \$DEV; "
+    done
+fi
+
+POSTUP_IPV6_CMDS=""
+PREDOWN_IPV6_CMDS=""
+if [ ${#IPV6_RANGES[@]} -gt 0 ]; then
+    for net in "${IPV6_RANGES[@]}"; do
+        if [[ "$net" == "fe80::/10" || "$net" == "ff00::/8" ]]; then
+            POSTUP_IPV6_CMDS="${POSTUP_IPV6_CMDS}ip -6 route add ${net} dev \$DEV; "
+            PREDOWN_IPV6_CMDS="${PREDOWN_IPV6_CMDS}ip -6 route del ${net} dev \$DEV; "
+        else
+            POSTUP_IPV6_CMDS="${POSTUP_IPV6_CMDS}ip -6 route add ${net} via \$GW6 dev \$DEV; "
+            PREDOWN_IPV6_CMDS="${PREDOWN_IPV6_CMDS}ip -6 route del ${net} via \$GW6 dev \$DEV; "
+        fi
+    done
+fi
+
+ROUTING_BLOCK=""
+
+if [ -n "$POSTUP_IPV4_CMDS" ]; then
+    ROUTING_BLOCK="${ROUTING_BLOCK}\n# IPv4 LAN Routing\nPostUp = GW=\$(ip route | awk '/^default/ {print \$3}'); DEV=\$(ip route | awk '/^default/ {print \$5}'); ${POSTUP_IPV4_CMDS}\nPreDown = GW=\$(ip route | awk '/^default/ {print \$3}'); DEV=\$(ip route | awk '/^default/ {print \$5}'); ${PREDOWN_IPV4_CMDS}\n"
+fi
+
+if [ -n "$POSTUP_IPV6_CMDS" ]; then
+    ROUTING_BLOCK="${ROUTING_BLOCK}\n# IPv6 LAN Routing\nPostUp = GW6=\$(ip -6 route | awk '/^default/ {print \$3}'); DEV=\$(ip -6 route | awk '/^default/ {print \$5}'); ${POSTUP_IPV6_CMDS}\nPreDown = GW6=\$(ip -6 route | awk '/^default/ {print \$3}'); DEV=\$(ip -6 route | awk '/^default/ {print \$5}'); ${PREDOWN_IPV6_CMDS}\n"
+fi
+
+mkdir -p /etc/wireguard
+TARGET_CONF="/etc/wireguard/wg0.conf"
+
+if [ -n "$ROUTING_BLOCK" ]; then
+    awk -v block="$ROUTING_BLOCK" '
+    !inserted && /^\[Peer\]/ {
+        print block
+        inserted=1
+    }
+    { print }
+    END {
+        if (!inserted) {
+            print "\n" block
+        }
+    }
+    ' "$SELECTED_FILE" > "$TARGET_CONF"
+else
+    cp "$SELECTED_FILE" "$TARGET_CONF"
+fi

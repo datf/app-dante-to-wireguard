@@ -4,8 +4,6 @@
 # s6-overlay docs: https://github.com/just-containers/s6-overlay
 # ==============================================================================
 
-cp /config/wg0.conf /etc/wireguard
-
 resolvconf -u
 
 # Since we are a VPN client we do not need the sysctl commands.
