@@ -88,19 +88,25 @@ fi
 mkdir -p /etc/wireguard
 TARGET_CONF="/etc/wireguard/wg0.conf"
 
-if [ -n "$ROUTING_BLOCK" ]; then
-    awk -v block="$ROUTING_BLOCK" '
-    !inserted && /^\[Peer\]/ {
-        print block
-        inserted=1
-    }
-    { print }
-    END {
-        if (!inserted) {
-            print "\n" block
-        }
-    }
-    ' "$SELECTED_FILE" > "$TARGET_CONF"
-else
-    cp "$SELECTED_FILE" "$TARGET_CONF"
+MTU_VALUE=""
+if bashio::config.exists 'mtu' && bashio::config.has_value 'mtu'; then
+    MTU_VALUE=$(bashio::config 'mtu')
 fi
+
+awk -v block="$ROUTING_BLOCK" -v mtu="$MTU_VALUE" '
+tolower($0) ~ /^[ \t]*mtu[ \t]*=/ {
+    next
+}
+!inserted && /^\[Peer\]/ {
+    if (mtu != "") print "MTU = " mtu
+    if (block != "") print block
+    inserted=1
+}
+{ print }
+END {
+    if (!inserted) {
+        if (mtu != "") print "MTU = " mtu
+        if (block != "") print "\n" block
+    }
+}
+' "$SELECTED_FILE" > "$TARGET_CONF"
