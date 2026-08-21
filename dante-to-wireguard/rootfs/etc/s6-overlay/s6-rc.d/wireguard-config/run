@@ -3,9 +3,9 @@
 # Rotate WireGuard configuration and add LAN routing
 # ==============================================================================
 
-CONFIG_FILES=( $(find /config -maxdepth 1 -name "wg*.conf" 2>/dev/null | sort -V) )
+mapfile -t CONFIG_FILES < <(find /config -maxdepth 1 -name "wg*.conf" 2>/dev/null | sort -V)
 if [ ${#CONFIG_FILES[@]} -eq 0 ]; then
-    CONFIG_FILES=( $(find /config -maxdepth 1 -name "wireguard*.conf" -o -name "*.conf" ! -name "sockd.conf" 2>/dev/null | sort -V) )
+    mapfile -t CONFIG_FILES < <(find /config -maxdepth 1 \( -name "wireguard*.conf" -o -name "*.conf" \) ! -name "sockd.conf" 2>/dev/null | sort -V)
 fi
 
 TOTAL_FILES=${#CONFIG_FILES[@]}
@@ -31,7 +31,6 @@ fi
 
 SELECTED_FILE="${CONFIG_FILES[$SELECTED_INDEX]}"
 SELECTED_FILENAME=$(basename "$SELECTED_FILE")
-SELECTED_NAME="${SELECTED_FILENAME%.*}"
 
 bashio::log.debug "Selected WireGuard configuration ($(( SELECTED_INDEX + 1 ))/${TOTAL_FILES}): ${SELECTED_FILENAME}"
 
