@@ -37,52 +37,19 @@ bashio::log.debug "Selected WireGuard configuration ($(( SELECTED_INDEX + 1 ))/$
 mkdir -p /data
 echo "$SELECTED_FILENAME" > /data/.wireguard_last_used
 
-IPV4_RANGES=()
-IPV6_RANGES=()
+DNS_IPS=$(grep -i '^[ \t]*DNS[ \t]*=' "$SELECTED_FILE" | cut -d'=' -f2- | tr ',' ' ')
+DNS_ROUTING=""
+for IP in $DNS_IPS; do
+    # Check for IPv4
+    if [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        DNS_ROUTING="${DNS_ROUTING}\nPostUp = ip rule add to $IP table 51820 2>/dev/null || true\nPreDown = ip rule del to $IP table 51820 2>/dev/null || true"
+    # Check for IPv6 (contains a colon)
+    elif [[ "$IP" == *":"* ]]; then
+        DNS_ROUTING="${DNS_ROUTING}\nPostUp = ip -6 rule add to $IP table 51820 2>/dev/null || true\nPreDown = ip -6 rule del to $IP table 51820 2>/dev/null || true"
+    fi
+done
 
-if bashio::config.exists 'lan_subnets' && bashio::config.has_value 'lan_subnets'; then
-    for range in $(bashio::config 'lan_subnets'); do
-        range=$(echo "$range" | tr -d '"'\'' ')
-        if [[ "$range" == *":"* ]]; then
-            IPV6_RANGES+=("$range")
-        elif [[ "$range" == *"."* ]]; then
-            IPV4_RANGES+=("$range")
-        fi
-    done
-fi
-
-POSTUP_IPV4_CMDS=""
-PREDOWN_IPV4_CMDS=""
-if [ ${#IPV4_RANGES[@]} -gt 0 ]; then
-    for net in "${IPV4_RANGES[@]}"; do
-        POSTUP_IPV4_CMDS="${POSTUP_IPV4_CMDS}ip route add ${net} via \$GW dev \$DEV; "
-        PREDOWN_IPV4_CMDS="${PREDOWN_IPV4_CMDS}ip route del ${net} via \$GW dev \$DEV; "
-    done
-fi
-
-POSTUP_IPV6_CMDS=""
-PREDOWN_IPV6_CMDS=""
-if [ ${#IPV6_RANGES[@]} -gt 0 ]; then
-    for net in "${IPV6_RANGES[@]}"; do
-        if [[ "$net" == "fe80::/10" || "$net" == "ff00::/8" ]]; then
-            POSTUP_IPV6_CMDS="${POSTUP_IPV6_CMDS}ip -6 route add ${net} dev \$DEV; "
-            PREDOWN_IPV6_CMDS="${PREDOWN_IPV6_CMDS}ip -6 route del ${net} dev \$DEV; "
-        else
-            POSTUP_IPV6_CMDS="${POSTUP_IPV6_CMDS}ip -6 route add ${net} via \$GW6 dev \$DEV; "
-            PREDOWN_IPV6_CMDS="${PREDOWN_IPV6_CMDS}ip -6 route del ${net} via \$GW6 dev \$DEV; "
-        fi
-    done
-fi
-
-ROUTING_BLOCK=""
-
-if [ -n "$POSTUP_IPV4_CMDS" ]; then
-    ROUTING_BLOCK="${ROUTING_BLOCK}\n# IPv4 LAN Routing\nPostUp = GW=\$(ip route | awk '/^default/ {print \$3}'); DEV=\$(ip route | awk '/^default/ {print \$5}'); ${POSTUP_IPV4_CMDS}\nPreDown = GW=\$(ip route | awk '/^default/ {print \$3}'); DEV=\$(ip route | awk '/^default/ {print \$5}'); ${PREDOWN_IPV4_CMDS}\n"
-fi
-
-if [ -n "$POSTUP_IPV6_CMDS" ]; then
-    ROUTING_BLOCK="${ROUTING_BLOCK}\n# IPv6 LAN Routing\nPostUp = GW6=\$(ip -6 route | awk '/^default/ {print \$3}'); DEV=\$(ip -6 route | awk '/^default/ {print \$5}'); ${POSTUP_IPV6_CMDS}\nPreDown = GW6=\$(ip -6 route | awk '/^default/ {print \$3}'); DEV=\$(ip -6 route | awk '/^default/ {print \$5}'); ${PREDOWN_IPV6_CMDS}\n"
-fi
+ROUTING_BLOCK="\nTable = 51820\nPostUp = ip rule add oif wg0 table 51820; ip -6 rule add oif wg0 table 51820 2>/dev/null || true\nPreDown = ip rule del oif wg0 table 51820; ip -6 rule del oif wg0 table 51820 2>/dev/null || true${DNS_ROUTING}\n"
 
 mkdir -p /etc/wireguard
 TARGET_CONF="/etc/wireguard/wg0.conf"
@@ -94,6 +61,9 @@ fi
 
 awk -v block="$ROUTING_BLOCK" -v mtu="$MTU_VALUE" '
 tolower($0) ~ /^[ \t]*mtu[ \t]*=/ {
+    next
+}
+tolower($0) ~ /^[ \t]*table[ \t]*=/ {
     next
 }
 !inserted && /^\[Peer\]/ {
