@@ -33,7 +33,6 @@ SELECTED_FILE="${CONFIG_FILES[$SELECTED_INDEX]}"
 SELECTED_FILENAME=$(basename "$SELECTED_FILE")
 
 bashio::log.debug "Selected WireGuard configuration ($(( SELECTED_INDEX + 1 ))/${TOTAL_FILES}): ${SELECTED_FILENAME}"
-
 mkdir -p /data
 echo "$SELECTED_FILENAME" > /data/.wireguard_last_used
 
@@ -49,7 +48,18 @@ for IP in $DNS_IPS; do
     fi
 done
 
-ROUTING_BLOCK="\nTable = 51820\nPostUp = ip rule add oif wg0 table 51820; ip -6 rule add oif wg0 table 51820 2>/dev/null || true\nPreDown = ip rule del oif wg0 table 51820; ip -6 rule del oif wg0 table 51820 2>/dev/null || true${DNS_ROUTING}\n"
+WG_IPS=$(grep -i '^[ \t]*Address[ \t]*=' "$SELECTED_FILE" | cut -d'=' -f2- | tr ',' ' ')
+SRC_ROUTING=""
+for IP_CIDR in $WG_IPS; do
+    IP=${IP_CIDR%/*} # strip CIDR
+    if [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        SRC_ROUTING="${SRC_ROUTING}\nPostUp = ip rule add from $IP table 51820 2>/dev/null || true\nPreDown = ip rule del from $IP table 51820 2>/dev/null || true"
+    elif [[ "$IP" == *":"* ]]; then
+        SRC_ROUTING="${SRC_ROUTING}\nPostUp = ip -6 rule add from $IP table 51820 2>/dev/null || true\nPreDown = ip -6 rule del from $IP table 51820 2>/dev/null || true"
+    fi
+done
+
+ROUTING_BLOCK="\nTable = 51820\nPostUp = ip rule add oif wg0 table 51820 2>/dev/null || true\nPreDown = ip rule del oif wg0 table 51820 2>/dev/null || true\nPostUp = ip -6 rule add oif wg0 table 51820 2>/dev/null || true\nPreDown = ip -6 rule del oif wg0 table 51820 2>/dev/null || true${DNS_ROUTING}${SRC_ROUTING}\n"
 
 mkdir -p /etc/wireguard
 TARGET_CONF="/etc/wireguard/wg0.conf"
